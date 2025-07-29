@@ -15,7 +15,9 @@ from build import (
     compare_saved_outputs,
     find_damaged_layer,
     train_healing_patch,
-    fgsm_attack, pgd_attack, generate_adversarial_examples
+    fgsm_attack, pgd_attack, generate_adversarial_examples,
+    find_damaged_layer,
+    train_healed_model
 )
 
 st.set_page_config(page_title="Simulate SHNN", layout="wide")
@@ -86,26 +88,27 @@ if uploaded_file:
 
         if st.session_state.get("model_created"):
             st.header("⚔️ Choose Repair Path")
-            path = st.radio("Select repair path:", ["Adversarial", "Structural", "Combined"], horizontal=True)
+            path = st.radio("Select repair path:", ["Adversarial", "Structural"], horizontal=True)
 
             # ----------------------------- Adversarial Path -----------------------------
             if path == "Adversarial":
                 st.subheader("🔐 Adversarial Repair")
+                model = st.session_state.model
+                X_sample = st.session_state.X_test[:100]
+                y_sample = st.session_state.y_test_cat[:100]
+                attack_type = st.selectbox("⚔️ Choose Adversarial Attack Type", ["FGSM", "PGD", "General"])
+                if attack_type == "FGSM":
+                    X_adv = fgsm_attack(model, X_sample, y_sample)
+                elif attack_type == "PGD":
+                    X_adv = pgd_attack(model, X_sample, y_sample)
+                elif attack_type == "General":
+                    X_adv = generate_adversarial_examples(model, X_sample, y_sample)
 
                 if st.button("🔒 Evaluate Model on Adversarial Samples"):
-                    model = st.session_state.model
-                    X_sample = st.session_state.X_test[:100]
-                    y_sample = st.session_state.y_test_cat[:100]
-
-                    X_fgsm = fgsm_attack(model, X_sample, y_sample)
-                    X_pgd = pgd_attack(model, X_sample, y_sample)
-                    X_gen = generate_adversarial_examples(model, X_sample, y_sample)
 
                     preds = {
                         "Normal": model.predict(X_sample),
-                        "FGSM": model.predict(X_fgsm),
-                        "PGD": model.predict(X_pgd),
-                        "General": model.predict(X_gen)
+                        attack_type: model.predict(X_adv)
                     }
 
                     accs = {k: np.mean(np.argmax(v, axis=1) == np.argmax(y_sample, axis=1)) * 100 for k, v in preds.items()}
@@ -113,9 +116,8 @@ if uploaded_file:
                     st.session_state.update({
                         "X_sample": X_sample,
                         "y_sample": y_sample,
-                        "X_fgsm": X_fgsm,
-                        "X_pgd": X_pgd,
-                        "X_gen": X_gen
+                        "X_adv": X_adv,
+                        "attack_type": attack_type
                     })
 
                     plot_bar(accs, "Accuracy Before Adversarial Healing")
@@ -125,28 +127,10 @@ if uploaded_file:
                         model = st.session_state.model
                         X_train = st.session_state.X_train
                         y_train_cat = st.session_state.y_train_cat
-
-                        N = 9000
-                        third = N // 3
-                        idx_clean = np.random.choice(len(X_train), N, replace=False)
-                        idx_fgsm = np.random.choice(len(X_train), third, replace=False)
-                        idx_pgd = np.random.choice(len(X_train), third, replace=False)
-                        idx_gen = np.random.choice(len(X_train), third, replace=False)
-
-                        X_fgsm = fgsm_attack(model, X_train[idx_fgsm], y_train_cat[idx_fgsm])
-                        X_pgd = pgd_attack(model, X_train[idx_pgd], y_train_cat[idx_pgd])
-                        X_gen = generate_adversarial_examples(model, X_train[idx_gen], y_train_cat[idx_gen])
-
-                        X_combined = np.concatenate([X_train[idx_clean], X_fgsm, X_pgd, X_gen])
-                        y_combined = np.concatenate([
-                            y_train_cat[idx_clean], y_train_cat[idx_fgsm],
-                            y_train_cat[idx_pgd], y_train_cat[idx_gen]
-                        ])
-
-                        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-                        model.fit(X_combined, y_combined, epochs=5, batch_size=128, validation_split=0.1, verbose=0)
-
-                        st.session_state.model = model
+                        X_test = st.session_state.X_test
+                        y_test_cat = st.session_state.y_test_cat
+                        healed_model = train_healed_model(model, None, X_train, y_train_cat, X_test,y_test_cat,attack_type)
+                        st.session_state.model = healed_model
                         st.success("✅ Model healed using adversarial training")
 
                 if st.button("📈 Re-evaluate After Adversarial Repair"):
@@ -155,9 +139,7 @@ if uploaded_file:
                     y_sample = st.session_state.y_sample
                     preds = {
                         "Normal": model.predict(X_sample),
-                        "FGSM": model.predict(st.session_state.X_fgsm),
-                        "PGD": model.predict(st.session_state.X_pgd),
-                        "General": model.predict(st.session_state.X_gen)
+                        attack_type: model.predict(st.session_state.X_adv)
                     }
                     accs = {k: np.mean(np.argmax(v, axis=1) == np.argmax(y_sample, axis=1)) * 100 for k, v in preds.items()}
                     plot_bar(accs, "Accuracy After Adversarial Healing")
@@ -207,136 +189,6 @@ if uploaded_file:
                     st.metric("🎯 Final Test Accuracy", f"{acc:.2f}%")
                     st.progress(acc / 100)
 
-            # ----------------------------- Combined Path -----------------------------
-            elif path == "Combined":
-                st.subheader("🔁 Combined Structural + Adversarial Healing")
-
-                if st.button("🔒 Evaluate Model on Adversarial Samples"):
-                    model = st.session_state.model
-                    X_sample = st.session_state.X_test[:100]
-                    y_sample = st.session_state.y_test_cat[:100]
-
-                    X_fgsm = fgsm_attack(model, X_sample, y_sample)
-                    X_pgd = pgd_attack(model, X_sample, y_sample)
-                    X_gen = generate_adversarial_examples(model, X_sample, y_sample)
-
-                    preds = {
-                        "Normal": model.predict(X_sample),
-                        "FGSM": model.predict(X_fgsm),
-                        "PGD": model.predict(X_pgd),
-                        "General": model.predict(X_gen)
-                    }
-
-                    accs = {k: np.mean(np.argmax(v, axis=1) == np.argmax(y_sample, axis=1)) * 100 for k, v in preds.items()}
-
-                    st.session_state.update({
-                        "X_sample": X_sample,
-                        "y_sample": y_sample,
-                        "X_fgsm": X_fgsm,
-                        "X_pgd": X_pgd,
-                        "X_gen": X_gen
-                    })
-
-                    plot_bar(accs, "Accuracy Before Adversarial Healing")
-
-                if st.button("💥 Apply Random Structural Damage"):
-                    st.session_state.model, layer, mode = apply_structural_damage(st.session_state.model)
-                    st.session_state.damaged_layer = layer
-                    st.error(f"💔 Structural damage applied to `{layer}` using `{mode}`")
-                
-                if st.button("🩻 Detect Damaged Layers"):
-                    curr_outputs = get_layer_outputs(st.session_state.model, st.session_state.X_test[:10])
-                    diffs = compare_saved_outputs(st.session_state.ref_outputs, curr_outputs)
-                    layer_names = ['dense0', 'dense1', 'dense2', 'output']
-                    layer = find_damaged_layer(diffs, layer_names)
-                    st.session_state.damaged_layer = layer
-                    st.warning(f"🔍 Most likely damaged layer: `{layer}`")
-                
-                if st.button("📉 Test Accuracy After Damage"):
-                    acc = get_acc(st.session_state.model, st.session_state.X_test, st.session_state.y_test_cat)
-                    st.metric("🎯 Accuracy After Damage", f"{acc:.2f}%")
-                    st.progress(acc / 100)
-
-                if st.button("🩹 Heal the Model with Structural Damage"):
-                    with st.spinner("Healing structurally damaged model..."):
-                        healed_model, _,history = train_healing_patch(
-                            st.session_state.model,
-                            st.session_state.damaged_layer,
-                            st.session_state.X_train,
-                            st.session_state.y_train_cat
-                        )
-                        st.session_state.model = healed_model
-                        st.success("✅ Model healing complete")
-                        fig, ax = plt.subplots()
-                        ax.plot(history.history['accuracy'], label='Training Accuracy')
-                        ax.set_title("📈 Patch Training Accuracy (Structural Healing)")
-                        ax.set_xlabel("Epoch")
-                        ax.set_ylabel("Accuracy")
-                        ax.legend()
-                        st.pyplot(fig)
-
-
-                        X_sample = st.session_state.X_test[:100]
-                        y_sample = st.session_state.y_test_cat[:100]
-
-                        X_fgsm = fgsm_attack(healed_model, X_sample, y_sample)
-                        X_pgd = pgd_attack(healed_model, X_sample, y_sample)
-                        X_gen = generate_adversarial_examples(healed_model, X_sample, y_sample)
-
-                        st.session_state.update({
-                            "X_sample": X_sample,
-                            "y_sample": y_sample,
-                            "X_fgsm": X_fgsm,
-                            "X_pgd": X_pgd,
-                            "X_gen": X_gen
-                        })
-
-                if st.button("🛡️ Heal with Adversarial Training (Post-Structural)"):
-                    with st.spinner("Generating adversarial examples and finetuning..."):
-                        model = st.session_state.model
-                        X_train = st.session_state.X_train
-                        y_train_cat = st.session_state.y_train_cat
-
-                        N = 9000
-                        third = N // 3
-                        idx_clean = np.random.choice(len(X_train), N, replace=False)
-                        idx_fgsm = np.random.choice(len(X_train), third, replace=False)
-                        idx_pgd = np.random.choice(len(X_train), third, replace=False)
-                        idx_gen = np.random.choice(len(X_train), third, replace=False)
-
-                        X_fgsm = fgsm_attack(model, X_train[idx_fgsm], y_train_cat[idx_fgsm])
-                        X_pgd = pgd_attack(model, X_train[idx_pgd], y_train_cat[idx_pgd])
-                        X_gen = generate_adversarial_examples(model, X_train[idx_gen], y_train_cat[idx_gen])
-
-                        X_combined = np.concatenate([X_train[idx_clean], X_fgsm, X_pgd, X_gen])
-                        y_combined = np.concatenate([
-                            y_train_cat[idx_clean], y_train_cat[idx_fgsm],
-                            y_train_cat[idx_pgd], y_train_cat[idx_gen]
-                        ])
-
-                        model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-                        model.fit(X_combined, y_combined, epochs=5, batch_size=128, validation_split=0.1, verbose=0)
-
-                        st.session_state.model = model
-                        st.success("✅ Adversarial training complete")
-
-                if st.button("📈 Evaluate Combined Healing Accuracy"):
-                    acc = get_acc(st.session_state.model, st.session_state.X_test, st.session_state.y_test_cat)
-                    st.metric("🎯 Accuracy on Clean Test Data", f"{acc:.2f}%")
-                    st.progress(acc / 100)
-
-                if st.button("🔬 Evaluate Final Accuracy on Adversarial Samples"):
-                    model = st.session_state.model
-                    X_sample = st.session_state.X_sample
-                    y_sample = st.session_state.y_sample
-                    preds = {
-                        "Normal": model.predict(X_sample),
-                        "FGSM": model.predict(st.session_state.X_fgsm),
-                        "PGD": model.predict(st.session_state.X_pgd),
-                        "General": model.predict(st.session_state.X_gen)
-                    }
-                    accs = {k: np.mean(np.argmax(v, axis=1) == np.argmax(y_sample, axis=1)) * 100 for k, v in preds.items()}
-                    plot_bar(accs, "🎯 Accuracy After Combined Healing (on Adversarial Samples)")
-
     except Exception as e:
         st.error(f"⚠️ Error: {e}")
+

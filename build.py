@@ -81,6 +81,8 @@ def find_damaged_layer(diffs, layer_names, threshold=0.1):
     return layer_names[np.argmax(diffs)]
 
 
+
+
 def train_healing_patch(model, damaged_layer, x_train, y_train,
                         input_shape=(784,), train_samples=10000,
                         epochs=5, batch_size=128):
@@ -141,7 +143,6 @@ def train_healing_patch(model, damaged_layer, x_train, y_train,
     healing_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
     history=healing_model.fit(x_train[:train_samples], y_train[:train_samples], epochs=epochs, batch_size=batch_size)
-
     return healing_model, patch,history
 
 
@@ -188,3 +189,81 @@ def pgd_attack(model, x, y, epsilon=0.2, alpha=0.01, num_iter=30):
         x_adv = tf.clip_by_value(x_adv, x - epsilon, x + epsilon)  # project perturbation
         x_adv = tf.clip_by_value(x_adv, 0, 1)  # keep valid pixel range
     return x_adv.numpy()
+
+
+def get_damaged_layer(model,X_test,y_test_cat,attack_type):
+    X_clean = X_test[:100]
+    n=100
+    if attack_type == 'FGSM':
+        X_adv = fgsm_attack(model, X_test[:n], y_test_cat[:n])
+    elif attack_type == 'PGD':
+        X_adv = pgd_attack(model, X_test[:n], y_test_cat[:n])
+    elif attack_type == 'General':
+        X_adv = generate_adversarial_examples(model, X_test[:n], y_test_cat[:n])
+
+    layer_outputs = [layer.output for layer in model.layers]
+    activation_model = Model(inputs=model.input, outputs=layer_outputs)
+
+    # Get activations
+    clean_activations = activation_model.predict(X_clean)
+    adv_activations = activation_model.predict(X_adv)
+
+    layer_differences = []
+    for clean, adv in zip(clean_activations, adv_activations):
+        mse = np.mean((clean - adv) ** 2)
+        layer_differences.append(mse)
+
+    return model.layers[np.argmax(layer_differences)].name     
+
+def build_patch(output_dim):
+    return Sequential([
+        Dense(output_dim, activation='relu'),
+        Dense(output_dim, activation='linear')
+    ])
+def integrate_patch(model, damaged_layer, patch):
+    patched_input = Input(shape=model.input_shape[1:])
+    intermediate_output = model.get_layer(damaged_layer).output
+    patched_output = patch(intermediate_output)
+
+    layer_idx = [l.name for l in model.layers].index(damaged_layer)
+    x = patched_output
+    for next_layer in model.layers[layer_idx + 1:]:
+        x = next_layer(x)
+
+    healed_model = Model(inputs=model.input, outputs=x)
+    return healed_model
+def freeze_except_patch(healed_model, patch):
+    for layer in healed_model.layers:
+        layer.trainable = False
+    for layer in patch.layers:
+        layer.trainable = True
+
+def prepare_adversarial_training_data(model, X_train, y_train_cat, attack_type, n=15000):
+    # Select the attack type
+    if attack_type == 'FGSM':
+        X_adv = fgsm_attack(model, X_train[:n], y_train_cat[:n])
+    elif attack_type == 'PGD':
+        X_adv = pgd_attack(model, X_train[:n], y_train_cat[:n])
+    elif attack_type == 'General':
+        X_adv = generate_adversarial_examples(model, X_train[:n], y_train_cat[:n])
+
+    # Combine clean and adversarial data
+    y_adv = y_train_cat[:n]
+    X_total = np.concatenate([X_train[:n], X_adv])
+    y_total = np.concatenate([y_train_cat[:n], y_adv])
+    return X_total, y_total
+
+def train_healed_model(model, patch, X_train, y_train_cat, X_test,y_test_cat,attack_type):
+    
+    damaged_layer = get_damaged_layer(model, X_test,y_test_cat,attack_type)
+    output_dim = model.get_layer(damaged_layer).output.shape[1]
+
+    patch = build_patch(output_dim)
+    healed_model = integrate_patch(model, damaged_layer, patch)
+    freeze_except_patch(healed_model, patch)
+
+    healed_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+    X_total, y_total = prepare_adversarial_training_data(model, X_train, y_train_cat,attack_type)
+    healed_model.fit(X_total, y_total, epochs=10, batch_size=128, validation_split=0.1)
+    return healed_model
