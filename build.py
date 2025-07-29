@@ -140,9 +140,9 @@ def train_healing_patch(model, damaged_layer, x_train, y_train,
     healing_model = Model(inputs, outputs)
     healing_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-    healing_model.fit(x_train[:train_samples], y_train[:train_samples], epochs=epochs, batch_size=batch_size)
+    history=healing_model.fit(x_train[:train_samples], y_train[:train_samples], epochs=epochs, batch_size=batch_size)
 
-    return healing_model, patch
+    return healing_model, patch,history
 
 
 def fgsm_attack(model, x, y, epsilon=0.15):
