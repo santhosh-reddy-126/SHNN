@@ -32,6 +32,35 @@ def plot_bar(metrics, title):
     ax.set_title(title)
     st.pyplot(fig)
 
+def plot_weight_histograms(original_weights, damaged_weights, healed_weights, bins=100):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import streamlit as st
+
+    def flatten(weights_list):
+        return np.concatenate([
+            w.flatten() for w in weights_list
+            if isinstance(w, np.ndarray)
+        ])
+
+    orig = flatten(original_weights)
+    damaged = flatten(damaged_weights)
+    healed = flatten(healed_weights)
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.hist(orig, bins=bins, histtype='step', linewidth=2, label='Original')
+    ax.hist(damaged, bins=bins, histtype='step', linewidth=2, label='Damaged')
+    ax.hist(healed, bins=bins, histtype='step', linewidth=2, label='Healed')
+    ax.set_title("Weight Distribution Histogram")
+    ax.set_xlabel("Weight Value")
+    ax.set_ylabel("Frequency")
+    ax.set_yscale('log')
+    ax.legend()
+    st.pyplot(fig)
+
+
+
+
 def get_layer_outputs(model, X, layer_names=['dense0', 'dense1', 'dense2', 'output']):
     outputs = []
     for lname in layer_names:
@@ -96,13 +125,11 @@ if uploaded_file:
                 model = st.session_state.model
                 X_sample = st.session_state.X_test[:100]
                 y_sample = st.session_state.y_test_cat[:100]
-                attack_type = st.selectbox("⚔️ Choose Adversarial Attack Type", ["FGSM", "PGD", "General"])
+                attack_type = st.selectbox("⚔️ Choose Adversarial Attack Type", ["FGSM", "PGD"])
                 if attack_type == "FGSM":
                     X_adv = fgsm_attack(model, X_sample, y_sample)
                 elif attack_type == "PGD":
                     X_adv = pgd_attack(model, X_sample, y_sample)
-                elif attack_type == "General":
-                    X_adv = generate_adversarial_examples(model, X_sample, y_sample)
 
                 if st.button("🔒 Evaluate Model on Adversarial Samples"):
 
@@ -149,8 +176,10 @@ if uploaded_file:
                 st.subheader("🧱 Structural Damage Repair")
 
                 if st.button("💥 Apply Random Structural Damage"):
-                    st.session_state.model, layer, mode = apply_structural_damage(st.session_state.model)
+                    st.session_state.model, layer, mode,original_weights,damaged_weights = apply_structural_damage(st.session_state.model)
                     st.session_state.damaged_layer = layer
+                    st.session_state.org_weight = original_weights
+                    st.session_state.dmg_weight = damaged_weights
                     st.error(f"💔 Structural damage applied to `{layer}` using `{mode}`")
 
                 if st.button("🩻 Detect Damaged Layers"):
@@ -168,12 +197,13 @@ if uploaded_file:
 
                 if st.button("🩹 Heal the Model"):
                     with st.spinner("Healing structurally damaged model..."):
-                        healed_model, _, history = train_healing_patch(
+                        healed_model, _, history,healed_weights = train_healing_patch(
                             st.session_state.model,
                             st.session_state.damaged_layer,
                             st.session_state.X_train,
                             st.session_state.y_train_cat
                         )
+                        plot_weight_histograms(st.session_state.org_weight,st.session_state.dmg_weight,healed_weights)
                         st.session_state.model = healed_model
                         st.success("✅ Model healing complete")
                         fig, ax = plt.subplots()
@@ -191,4 +221,3 @@ if uploaded_file:
 
     except Exception as e:
         st.error(f"⚠️ Error: {e}")
-

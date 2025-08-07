@@ -38,7 +38,7 @@ def apply_structural_damage(model):
         damaged_weights = [w * 0.01 for w in weights]
 
     damaged_layer.set_weights(damaged_weights)
-    return model, layer_name, mode
+    return model, layer_name, mode, weights,damaged_weights
 
 
 def create_base_model():
@@ -143,7 +143,7 @@ def train_healing_patch(model, damaged_layer, x_train, y_train,
     healing_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
     history=healing_model.fit(x_train[:train_samples], y_train[:train_samples], epochs=epochs, batch_size=batch_size)
-    return healing_model, patch,history
+    return healing_model, patch,history,patch.get_weights()
 
 
 def fgsm_attack(model, x, y, epsilon=0.15):
@@ -198,8 +198,6 @@ def get_damaged_layer(model,X_test,y_test_cat,attack_type):
         X_adv = fgsm_attack(model, X_test[:n], y_test_cat[:n])
     elif attack_type == 'PGD':
         X_adv = pgd_attack(model, X_test[:n], y_test_cat[:n])
-    elif attack_type == 'General':
-        X_adv = generate_adversarial_examples(model, X_test[:n], y_test_cat[:n])
 
     layer_outputs = [layer.output for layer in model.layers]
     activation_model = Model(inputs=model.input, outputs=layer_outputs)
@@ -244,8 +242,6 @@ def prepare_adversarial_training_data(model, X_train, y_train_cat, attack_type, 
         X_adv = fgsm_attack(model, X_train[:n], y_train_cat[:n])
     elif attack_type == 'PGD':
         X_adv = pgd_attack(model, X_train[:n], y_train_cat[:n])
-    elif attack_type == 'General':
-        X_adv = generate_adversarial_examples(model, X_train[:n], y_train_cat[:n])
 
     # Combine clean and adversarial data
     y_adv = y_train_cat[:n]
