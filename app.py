@@ -24,7 +24,9 @@ from build import (
     build_patch,
     integrate_patch,
     freeze_except_patch,
-    show_patch_layer_replacement
+    show_patch_layer_replacement,
+    show_layer_damage_circles_for_struc,
+    show_layer_patch_circles_for_struc
 )
 
 st.set_page_config(page_title="Simulate SHNN", layout="wide")
@@ -68,13 +70,6 @@ def plot_weight_histograms(original_weights, damaged_weights, healed_weights, bi
 
 
 
-def get_layer_outputs(model, X, layer_names=['dense0', 'dense1', 'dense2', 'output']):
-    outputs = []
-    for lname in layer_names:
-        layer = model.get_layer(lname)
-        intermediate_model = Model(inputs=model.input, outputs=layer.output)
-        outputs.append(intermediate_model.predict(X))
-    return outputs
 
 def compare_saved_outputs(ref_outputs, new_outputs):
     return [np.mean(np.abs(ref - new)) for ref, new in zip(ref_outputs, new_outputs)]
@@ -256,8 +251,11 @@ if uploaded_file:
                 if st.button("🩻 Detect Damaged Layers"):
                     curr_outputs = get_layer_outputs(st.session_state.model, st.session_state.X_test[:10])
                     diffs = compare_saved_outputs(st.session_state.ref_outputs, curr_outputs)
+                    
                     layer_names = ['dense0', 'dense1', 'dense2', 'output']
+                    
                     layer = find_damaged_layer(diffs, layer_names)
+                    show_layer_damage_circles_for_struc(diffs,layer_names,layer,st)
                     st.session_state.damaged_layer = layer
                     st.warning(f"🔍 Most likely damaged layer: `{layer}`")
 
@@ -276,6 +274,7 @@ if uploaded_file:
                         )
                         plot_weight_histograms(st.session_state.org_weight,st.session_state.dmg_weight,healed_weights)
                         st.session_state.model = healed_model
+                        show_patch_layer_replacement([layer.name for layer in healed_model.layers],'patch',st)
                         st.success("✅ Model healing complete")
                         fig, ax = plt.subplots()
                         ax.plot(history.history['accuracy'], label='Training Accuracy')
@@ -287,6 +286,16 @@ if uploaded_file:
 
                 if st.button("📊 Calculate Test Accuracy"):
                     acc = get_acc(st.session_state.model, st.session_state.X_test, st.session_state.y_test_cat)
+                    
+                    layer_names = ['dense0', 'dense1', 'dense2', 'output']
+                    idx = layer_names.index(st.session_state.damaged_layer)
+                    layer_names[idx] = "patch"
+                    healed_op = get_layer_outputs(st.session_state.model, st.session_state.X_test[:10],layer_names)
+                    
+                    diffs = compare_saved_outputs(st.session_state.ref_outputs, healed_op)
+
+
+                    show_layer_patch_circles_for_struc(diffs,layer_names,'patch',st)
                     st.metric("🎯 Final Test Accuracy", f"{acc:.2f}%")
                     st.progress(acc / 100)
 

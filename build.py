@@ -13,7 +13,6 @@ def apply_structural_damage(model):
     Modes:
         - 'zero': set weights to 0
         - 'random': set weights to small random values
-        - 'scale': scale weights down by 0.01
 
     Returns:
         model: Damaged model
@@ -26,7 +25,7 @@ def apply_structural_damage(model):
 
     damaged_layer = random.choice(dense_layers)
     layer_name = damaged_layer.name
-    mode = random.choice(['zero', 'random', 'scale'])
+    mode = random.choice(['zero','random'])
 
     weights = damaged_layer.get_weights()
     if not weights:
@@ -36,8 +35,6 @@ def apply_structural_damage(model):
         damaged_weights = [np.zeros_like(w) for w in weights]
     elif mode == 'random':
         damaged_weights = [np.random.randn(*w.shape) * 0.1 for w in weights]
-    elif mode == 'scale':
-        damaged_weights = [w * 0.01 for w in weights]
 
     damaged_layer.set_weights(damaged_weights)
     return model, layer_name, mode, weights,damaged_weights
@@ -58,13 +55,17 @@ def get_acc(model, X, y_true):
 
 layer_names = ['dense0', 'dense1', 'dense2', 'output']
 
+
+
 def get_layer_outputs(model, X, layer_names=layer_names):
     outputs = []
+    x = X
+
     for lname in layer_names:
         layer = model.get_layer(lname)
-        intermediate_model = tf.keras.Model(inputs=model.input, outputs=layer.output)
-        out = intermediate_model.predict(X, verbose=0)
-        outputs.append(out)
+        x = layer(x)  # feed current data to next layer
+        outputs.append(x.numpy())  # convert Tensor to numpy for consistency
+
     return outputs
 
 
@@ -88,18 +89,17 @@ def find_damaged_layer(diffs, layer_names, threshold=0.1):
 def train_healing_patch(model, damaged_layer, x_train, y_train,
                         input_shape=(784,), train_samples=10000,
                         epochs=5, batch_size=128):
+    # Freeze all layers
     for layer in model.layers:
         layer.trainable = False
     layer_names = [l.name for l in model.layers]
     idx = layer_names.index(damaged_layer)
-
-    # Determine patch input dim
+    # Determine patch input/output dims
     if damaged_layer == 'dense0':
         patch_input_dim = input_shape[0]
     else:
         patch_input_dim = model.get_layer(layer_names[idx - 1]).units
 
-    # Determine patch output dim and loss
     if damaged_layer == 'output':
         patch_output_dim = y_train.shape[1]
         patch_activation = 'softmax'
@@ -108,44 +108,33 @@ def train_healing_patch(model, damaged_layer, x_train, y_train,
         patch_output_dim = model.get_layer(damaged_layer).units
         patch_activation = 'relu'
         patch_loss = 'mse'
+    # Create patch layer
+    patch_layer = Dense(patch_output_dim, activation=patch_activation, name='patch')
+    patch_model = Sequential([patch_layer], name='patch')
+    patch_model.compile(optimizer='adam', loss=patch_loss)
 
-    # Define patch
-    patch = Sequential([
-        Dense(patch_output_dim, activation=patch_activation, input_shape=(patch_input_dim,))
-    ])
-    patch.compile(optimizer='adam', loss=patch_loss)
+    x = inputs = Input(shape=model.input_shape[1:])
+    for i in range(idx):
+        if isinstance(model.layers[i], InputLayer):
+            continue
+        x = model.layers[i](x)
+    x = patch_layer(x)
+    for i in range(idx + 1, len(model.layers)):
+        if isinstance(model.layers[i], InputLayer):
+            continue
+        x = model.layers[i](x)
 
-    # Freeze original model layers
-    for layer in model.layers:
-        layer.trainable = False
 
-    inputs = Input(shape=input_shape)
-
-    # Model part before damaged layer
-    if damaged_layer == 'dense0':
-        x = inputs
-    else:
-        prev_layer_name = layer_names[idx - 1]
-        prev_model = Model(inputs=model.input, outputs=model.get_layer(prev_layer_name).output)
-        x = prev_model(inputs)
-
-    # Patch replaces damaged layer
-    x = patch(x)
-
-    # Model part after damaged layer
-    if damaged_layer == layer_names[-1]:  # damaged layer is last layer
-        outputs = x
-    else:
-        next_layer_name = layer_names[idx + 1]
-        # Build model from patch output to final output
-        post_model = Model(inputs=model.get_layer(next_layer_name).input, outputs=model.output)
-        outputs = post_model(x)
-
-    healing_model = Model(inputs, outputs)
+    healing_model = Model(inputs, outputs=x)
     healing_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-    history=healing_model.fit(x_train[:train_samples], y_train[:train_samples], epochs=epochs, batch_size=batch_size)
-    return healing_model, patch,history,patch.get_weights()
+    # Train only patch
+    history = healing_model.fit(
+        x_train[:train_samples], y_train[:train_samples],
+        epochs=epochs, batch_size=batch_size
+    )
+
+    return healing_model, patch_model, history, patch_layer.get_weights()
 
 #-----------------------------------------------------------------------------------
 
@@ -320,6 +309,92 @@ def show_layer_damage_circles(layer_differences, layer_names, damaged_layer_name
     st.pyplot(fig)
 
 
+def show_layer_damage_circles_for_struc(layer_differences, layer_names, damaged_layer_name, st):
+    st.markdown("## 🧠 Neural Network Layer Damage Map")
+
+    st.info(
+        "These numbers show how much each layer’s output changed due to damage.\n\n"
+        "We measure this using a **difference score** — higher means more disruption.\n\n"
+        "🔍 But we don’t just pick the highest score! Damage in early layers can make later ones look worse, even if they’re fine."
+    )
+
+    num_layers = len(layer_differences)
+    x_positions = np.linspace(1, num_layers, num_layers)
+    y_position = 1
+
+    fig, ax = plt.subplots(figsize=(num_layers * 1.2, 3))  
+    for i in range(num_layers):
+        x = x_positions[i]
+        mse = layer_differences[i]
+        label = layer_names[i]
+        color = 'red' if label == damaged_layer_name else 'skyblue'
+
+        circle = plt.Circle((x, y_position), 0.4, color=color, ec='black', lw=1.5)
+        ax.add_patch(circle)
+
+        ax.text(x, y_position, f"{mse:.1e}", fontsize=8.5, ha='center', va='center', color='black')
+
+        ax.text(x, y_position - 0.6, label, fontsize=9, ha='center', va='center', rotation=0)
+
+    damaged_idx = layer_names.index(damaged_layer_name)
+    x_arrow = x_positions[damaged_idx]
+    ax.annotate('Damaged Layer',
+                xy=(x_arrow, y_position + 0.5),
+                xytext=(x_arrow, y_position + 1.2),
+                ha='center', fontsize=10, color='red',
+                arrowprops=dict(facecolor='red', shrink=0.05, width=1.5, headwidth=6))
+
+    ax.set_xlim(0, num_layers + 1)
+    ax.set_ylim(0, 3)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    st.pyplot(fig)
+
+
+def show_layer_patch_circles_for_struc(layer_differences, layer_names, patch_layer_name, st):
+    st.markdown("## 🧠 Neural Network Layer Damage Map")
+
+    st.info(
+        "These numbers show how much each layer’s output changed due to damage.\n\n"
+        "We measure this using a **difference score** — higher means more disruption.\n\n"
+        "🛠️ The green circle shows the **patched layer** — a trained replacement for the one we detected as damaged."
+    )
+
+    num_layers = len(layer_differences)
+    x_positions = np.linspace(1, num_layers, num_layers)
+    y_position = 1
+
+    fig, ax = plt.subplots(figsize=(num_layers * 1.2, 3))
+    for i in range(num_layers):
+        x = x_positions[i]
+        mse = layer_differences[i]
+        label = layer_names[i]
+        color = 'green' if label == patch_layer_name else 'skyblue'
+
+        circle = plt.Circle((x, y_position), 0.4, color=color, ec='black', lw=1.5)
+        ax.add_patch(circle)
+
+        ax.text(x, y_position, f"{mse:.1e}", fontsize=8.5, ha='center', va='center', color='black')
+        ax.text(x, y_position - 0.6, label, fontsize=9, ha='center', va='center', rotation=0)
+
+    patch_idx = layer_names.index(patch_layer_name)
+    x_arrow = x_positions[patch_idx]
+    ax.annotate('Patched Layer',
+                xy=(x_arrow, y_position + 0.5),
+                xytext=(x_arrow, y_position + 1.2),
+                ha='center', fontsize=10, color='green',
+                arrowprops=dict(facecolor='green', shrink=0.05, width=1.5, headwidth=6))
+
+    ax.set_xlim(0, num_layers + 1)
+    ax.set_ylim(0, 3)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    st.pyplot(fig)
+
+
+
 def show_patch_layer_replacement(layer_names, patched_layer_name, st):
     st.markdown("## 🧩 Patched Neural Network Layer Map")
 
@@ -369,5 +444,7 @@ def show_patch_layer_replacement(layer_names, patched_layer_name, st):
     ax.axis('off')
 
     st.pyplot(fig)
+
+
 
 
