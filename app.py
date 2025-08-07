@@ -3,6 +3,7 @@ from scipy.io import loadmat
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.models import load_model
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Model
 import matplotlib.pyplot as plt
@@ -17,7 +18,13 @@ from build import (
     train_healing_patch,
     fgsm_attack, pgd_attack, generate_adversarial_examples,
     find_damaged_layer,
-    train_healed_model
+    train_healed_model,
+    show_layer_damage_circles,
+    get_damaged_layer,
+    build_patch,
+    integrate_patch,
+    freeze_except_patch,
+    show_patch_layer_replacement
 )
 
 st.set_page_config(page_title="Simulate SHNN", layout="wide")
@@ -72,6 +79,13 @@ def get_layer_outputs(model, X, layer_names=['dense0', 'dense1', 'dense2', 'outp
 def compare_saved_outputs(ref_outputs, new_outputs):
     return [np.mean(np.abs(ref - new)) for ref, new in zip(ref_outputs, new_outputs)]
 
+def prepare_image(img):
+    img = np.squeeze(img)
+    return img.reshape(28, 28) 
+    
+
+
+
 if uploaded_file:
     st.success("✅ File uploaded!")
 
@@ -107,6 +121,7 @@ if uploaded_file:
             with st.spinner("Training base model (2 epochs)..."):
                 model.fit(st.session_state.X_train, st.session_state.y_train_cat, epochs=2, batch_size=128, verbose=0)
                 loss, acc = model.evaluate(st.session_state.X_test, st.session_state.y_test_cat, verbose=0)
+
             st.session_state.update({
                 "model": model,
                 "model_created": True,
@@ -148,7 +163,31 @@ if uploaded_file:
                     })
 
                     plot_bar(accs, "Accuracy Before Adversarial Healing")
+                    st.markdown("### 🔍 Sample Predictions (Clean vs Adversarial)")
 
+                    num_to_show = 5
+                    class_names = [str(i) for i in range(10)]
+
+                    for i in range(num_to_show):
+                        col1, col2 = st.columns(2)
+
+                        true_label = class_names[np.argmax(y_sample[i])]
+                        clean_pred = class_names[np.argmax(preds["Normal"][i])]
+                        adv_pred = class_names[np.argmax(preds[attack_type][i])]
+
+                        with col1:
+                            st.markdown(f"**Clean Sample #{i+1}**")
+                            st.image(prepare_image(X_sample[i]), width=50,
+                                caption=f"True: {true_label} | Pred: {clean_pred}", use_container_width=True)
+
+                        with col2:
+                            st.markdown(f"**Adversarial Sample #{i+1}**")
+                            st.image(prepare_image(X_adv[i]), width=50,
+                                caption=f"True: {true_label} | Pred: {adv_pred}", use_container_width=True)
+                    X_test = st.session_state.X_test
+                    y_test_cat = st.session_state.y_test_cat
+                    a,b,c = get_damaged_layer(model,X_test,y_test_cat,attack_type)
+                    show_layer_damage_circles(b,c,a,st)
                 if st.button("🛡️ Heal Model with Adversarial Training"):
                     with st.spinner("Healing using adversarial examples..."):
                         model = st.session_state.model
@@ -156,8 +195,21 @@ if uploaded_file:
                         y_train_cat = st.session_state.y_train_cat
                         X_test = st.session_state.X_test
                         y_test_cat = st.session_state.y_test_cat
-                        healed_model = train_healed_model(model, None, X_train, y_train_cat, X_test,y_test_cat,attack_type)
+
+
+                        damaged_layer,_,__ = get_damaged_layer(model, X_test,y_test_cat,attack_type)
+                        output_dim = model.get_layer(damaged_layer).output.shape[1]
+                        
+                        patch = build_patch(output_dim)
+                        
+                        healed_model = integrate_patch(model, damaged_layer, patch)
+                        
+                        freeze_except_patch(healed_model, patch)
+                        
+
+                        healed_model = train_healed_model(healed_model,model,X_train, y_train_cat, attack_type)
                         st.session_state.model = healed_model
+                        show_patch_layer_replacement([layer.name for layer in healed_model.layers],"patch",st)
                         st.success("✅ Model healed using adversarial training")
 
                 if st.button("📈 Re-evaluate After Adversarial Repair"):
@@ -170,6 +222,25 @@ if uploaded_file:
                     }
                     accs = {k: np.mean(np.argmax(v, axis=1) == np.argmax(y_sample, axis=1)) * 100 for k, v in preds.items()}
                     plot_bar(accs, "Accuracy After Adversarial Healing")
+                    num_to_show = 10
+                    class_names = [str(i) for i in range(10)]
+
+                    for i in range(num_to_show):
+                        col1, col2 = st.columns(2)
+
+                        true_label = class_names[np.argmax(y_sample[i])]
+                        clean_pred = class_names[np.argmax(preds["Normal"][i])]
+                        adv_pred = class_names[np.argmax(preds[attack_type][i])]
+
+                        with col1:
+                            st.markdown(f"**Clean Sample #{i+1}**")
+                            st.image(prepare_image(X_sample[i]), width=50,
+                                caption=f"True: {true_label} | Pred: {clean_pred}", use_container_width=True)
+
+                        with col2:
+                            st.markdown(f"**Adversarial Sample #{i+1}**")
+                            st.image(prepare_image(X_adv[i]), width=50,
+                                caption=f"True: {true_label} | Pred: {adv_pred}", use_container_width=True)
 
             # ----------------------------- Structural Path -----------------------------
             elif path == "Structural":

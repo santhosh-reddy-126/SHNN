@@ -1,5 +1,7 @@
 from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.models import Model,Sequential
+from tensorflow.keras.layers import InputLayer
+import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
 import random
@@ -145,6 +147,8 @@ def train_healing_patch(model, damaged_layer, x_train, y_train,
     history=healing_model.fit(x_train[:train_samples], y_train[:train_samples], epochs=epochs, batch_size=batch_size)
     return healing_model, patch,history,patch.get_weights()
 
+#-----------------------------------------------------------------------------------
+
 
 def fgsm_attack(model, x, y, epsilon=0.15):
     x = tf.convert_to_tensor(x)
@@ -211,31 +215,45 @@ def get_damaged_layer(model,X_test,y_test_cat,attack_type):
         mse = np.mean((clean - adv) ** 2)
         layer_differences.append(mse)
 
-    return model.layers[np.argmax(layer_differences)].name     
+    return model.layers[np.argmax(layer_differences)].name,layer_differences,[layer.name for layer in model.layers]
 
 def build_patch(output_dim):
     return Sequential([
-        Dense(output_dim, activation='relu'),
-        Dense(output_dim, activation='linear')
-    ])
+        Dense(output_dim, activation='relu',name='patch_0'),
+        Dense(output_dim, activation='linear',name='patch_1')
+    ],name="patch")
+
+
 def integrate_patch(model, damaged_layer, patch):
-    patched_input = Input(shape=model.input_shape[1:])
-    intermediate_output = model.get_layer(damaged_layer).output
-    patched_output = patch(intermediate_output)
+    layer_names = [layer.name for layer in model.layers]
+    layer_idx = layer_names.index(damaged_layer)
 
-    layer_idx = [l.name for l in model.layers].index(damaged_layer)
-    x = patched_output
-    for next_layer in model.layers[layer_idx + 1:]:
-        x = next_layer(x)
+    x = inputs = Input(shape=model.input_shape[1:])
 
-    healed_model = Model(inputs=model.input, outputs=x)
+    for i in range(layer_idx):
+        if isinstance(model.layers[i], InputLayer):
+            continue  # skip InputLayer
+        x = model.layers[i](x)
+
+    x = patch(x)
+
+    for i in range(layer_idx + 1, len(model.layers)):
+        if isinstance(model.layers[i], InputLayer):
+            continue
+        x = model.layers[i](x)
+
+    healed_model = Model(inputs=inputs, outputs=x)
     return healed_model
+
+
+
 def freeze_except_patch(healed_model, patch):
+
     for layer in healed_model.layers:
         layer.trainable = False
     for layer in patch.layers:
         layer.trainable = True
-
+    
 def prepare_adversarial_training_data(model, X_train, y_train_cat, attack_type, n=15000):
     # Select the attack type
     if attack_type == 'FGSM':
@@ -249,17 +267,107 @@ def prepare_adversarial_training_data(model, X_train, y_train_cat, attack_type, 
     y_total = np.concatenate([y_train_cat[:n], y_adv])
     return X_total, y_total
 
-def train_healed_model(model, patch, X_train, y_train_cat, X_test,y_test_cat,attack_type):
-    
-    damaged_layer = get_damaged_layer(model, X_test,y_test_cat,attack_type)
-    output_dim = model.get_layer(damaged_layer).output.shape[1]
+def train_healed_model(healed_model,model, X_train, y_train_cat,attack_type):
 
-    patch = build_patch(output_dim)
-    healed_model = integrate_patch(model, damaged_layer, patch)
-    freeze_except_patch(healed_model, patch)
 
     healed_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
     X_total, y_total = prepare_adversarial_training_data(model, X_train, y_train_cat,attack_type)
     healed_model.fit(X_total, y_total, epochs=10, batch_size=128, validation_split=0.1)
     return healed_model
+
+
+def show_layer_damage_circles(layer_differences, layer_names, damaged_layer_name, st):
+    st.markdown("## 🧠 Neural Network Layer Damage Map")
+
+    st.info(
+        "Each circle represents a layer in the neural network.\n\n"
+        "🔵 The number inside shows how much that layer changed when attacked.\n\n"
+        "🔴 The red circle is the most damaged layer — where the model was hurt most by the adversarial attack."
+    )
+
+    num_layers = len(layer_differences)
+    x_positions = np.linspace(1, num_layers, num_layers)
+    y_position = 1
+
+    fig, ax = plt.subplots(figsize=(num_layers * 1.2, 3))  
+    for i in range(num_layers):
+        x = x_positions[i]
+        mse = layer_differences[i]
+        label = layer_names[i]
+        color = 'red' if label == damaged_layer_name else 'skyblue'
+
+        circle = plt.Circle((x, y_position), 0.4, color=color, ec='black', lw=1.5)
+        ax.add_patch(circle)
+
+        ax.text(x, y_position, f"{mse:.1e}", fontsize=8.5, ha='center', va='center', color='black')
+
+        ax.text(x, y_position - 0.6, label, fontsize=9, ha='center', va='center', rotation=0)
+
+    damaged_idx = layer_names.index(damaged_layer_name)
+    x_arrow = x_positions[damaged_idx]
+    ax.annotate('Damaged Layer',
+                xy=(x_arrow, y_position + 0.5),
+                xytext=(x_arrow, y_position + 1.2),
+                ha='center', fontsize=10, color='red',
+                arrowprops=dict(facecolor='red', shrink=0.05, width=1.5, headwidth=6))
+
+    ax.set_xlim(0, num_layers + 1)
+    ax.set_ylim(0, 3)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    st.pyplot(fig)
+
+
+def show_patch_layer_replacement(layer_names, patched_layer_name, st):
+    st.markdown("## 🧩 Patched Neural Network Layer Map")
+
+    st.success(
+        "We've repaired the most damaged layer! 🔧\n\n"
+        "Each circle below shows a layer in the model.\n\n"
+        "🟢 The patched layer is highlighted — it's a fresh new layer that replaces the damaged one!\n\n"
+        "Layers labeled **Frozen** are locked (not updated), while the patched layer is still trainable."
+    )
+
+    num_layers = len(layer_names)
+    x_positions = np.linspace(1, num_layers, num_layers)
+    y_position = 1
+
+    fig, ax = plt.subplots(figsize=(num_layers * 1.2, 3))
+
+    for i in range(num_layers):
+        x = x_positions[i]
+        label = layer_names[i]
+        is_patch = (label == patched_layer_name)
+        color = 'limegreen' if is_patch else 'lightgray'
+
+        # Draw the layer as a circle
+        circle = plt.Circle((x, y_position), 0.4, color=color, ec='black', lw=1.5)
+        ax.add_patch(circle)
+
+        # Layer name inside the circle
+        ax.text(x, y_position, label, fontsize=7, ha='center', va='center', color='black')
+
+        # Trainable status below the circle
+        train_text = "Trainable" if is_patch else "Frozen"
+        train_color = 'green' if is_patch else 'gray'
+        ax.text(x, y_position - 0.6, train_text, fontsize=8, ha='center', va='center', color=train_color)
+
+    # Arrow to patched layer
+    patched_idx = layer_names.index(patched_layer_name)
+    x_arrow = x_positions[patched_idx]
+    ax.annotate('Patched Layer',
+                xy=(x_arrow, y_position + 0.5),
+                xytext=(x_arrow, y_position + 1.2),
+                ha='center', fontsize=10, color='green',
+                arrowprops=dict(facecolor='green', shrink=0.05, width=1.5, headwidth=6))
+
+    ax.set_xlim(0, num_layers + 1)
+    ax.set_ylim(0, 3)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    st.pyplot(fig)
+
+
