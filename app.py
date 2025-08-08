@@ -16,7 +16,7 @@ from build import (
     compare_saved_outputs,
     find_damaged_layer,
     train_healing_patch,
-    fgsm_attack, pgd_attack, generate_adversarial_examples,
+    fgsm_attack, pgd_attack,
     find_damaged_layer,
     train_healed_model,
     show_layer_damage_circles,
@@ -25,6 +25,7 @@ from build import (
     integrate_patch,
     freeze_except_patch,
     show_patch_layer_replacement,
+    show_patch_layer_replacement_struc,
     show_layer_damage_circles_for_struc,
     show_layer_patch_circles_for_struc
 )
@@ -36,7 +37,13 @@ uploaded_file = st.file_uploader("📂 Upload MNIST .mat file (e.g., mnist-origi
 
 def plot_bar(metrics, title):
     fig, ax = plt.subplots()
-    sns.barplot(x=list(metrics.keys()), y=list(metrics.values()), palette="viridis", ax=ax)
+    bars = sns.barplot(x=list(metrics.keys()), y=list(metrics.values()), palette="viridis", ax=ax)
+    
+    for bar, value in zip(bars.patches, metrics.values()):
+        ax.annotate(f'{value:.1f}%', 
+                    (bar.get_x() + bar.get_width() / 2, bar.get_height()), 
+                    ha='center', va='bottom', fontsize=10, color='black')
+    
     ax.set_ylabel("Accuracy (%)")
     ax.set_title(title)
     st.pyplot(fig)
@@ -113,9 +120,36 @@ if uploaded_file:
         if st.button("🚀 Create Base Model"):
             model = create_base_model()
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-            with st.spinner("Training base model (2 epochs)..."):
-                model.fit(st.session_state.X_train, st.session_state.y_train_cat, epochs=2, batch_size=128, verbose=0)
+            with st.spinner("Training base model (10 epochs)..."):
+                history=model.fit(st.session_state.X_train, st.session_state.y_train_cat, epochs=10, batch_size=128, verbose=0)
                 loss, acc = model.evaluate(st.session_state.X_test, st.session_state.y_test_cat, verbose=0)
+            st.subheader("Training Progress")
+
+            # Create two plots
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+            acc_key = 'accuracy'
+            if acc_key not in history.history:
+                acc_key = 'acc'  
+            train_acc = history.history[acc_key][-1]
+            # Plot Training Accuracy
+            ax1.plot(history.history[acc_key], label='Training Accuracy', color='tab:blue')
+            ax1.set_title('Training Accuracy')
+            ax1.set_xlabel('Epoch')
+            ax1.set_ylabel('Accuracy')
+            ax1.legend()
+            ax1.grid(True)
+
+            # Plot Training Loss
+            ax2.plot(history.history['loss'], label='Training Loss', color='tab:orange')
+            ax2.set_title('Training Loss')
+            ax2.set_xlabel('Epoch')
+            ax2.set_ylabel('Loss')
+            ax2.legend()
+            ax2.grid(True)
+
+            # Display the plot in Streamlit
+            st.pyplot(fig)
 
             st.session_state.update({
                 "model": model,
@@ -123,7 +157,7 @@ if uploaded_file:
                 "ref_outputs": get_layer_outputs(model, st.session_state.X_test[:10]),
                 "X_sample_ref": st.session_state.X_test[:10]
             })
-            st.success(f"✅ Base Model Trained - Accuracy: **{acc:.2%}**")
+            st.success(f"✅ Base Model Trained - Train Accuracy: **{train_acc:.2%}** Test Accuracy: **{acc:.2%}**")
 
         if st.session_state.get("model_created"):
             st.header("⚔️ Choose Repair Path")
@@ -149,7 +183,7 @@ if uploaded_file:
                     }
 
                     accs = {k: np.mean(np.argmax(v, axis=1) == np.argmax(y_sample, axis=1)) * 100 for k, v in preds.items()}
-
+                    
                     st.session_state.update({
                         "X_sample": X_sample,
                         "y_sample": y_sample,
@@ -204,7 +238,11 @@ if uploaded_file:
 
                         healed_model = train_healed_model(healed_model,model,X_train, y_train_cat, attack_type)
                         st.session_state.model = healed_model
-                        show_patch_layer_replacement([layer.name for layer in healed_model.layers],"patch",st)
+
+                        X_test = st.session_state.X_test
+                        y_test_cat = st.session_state.y_test_cat
+                        a,b,c = get_damaged_layer(healed_model,X_test,y_test_cat,attack_type)
+                        show_patch_layer_replacement(c,b,"patch",st)
                         st.success("✅ Model healed using adversarial training")
 
                 if st.button("📈 Re-evaluate After Adversarial Repair"):
@@ -274,7 +312,7 @@ if uploaded_file:
                         )
                         plot_weight_histograms(st.session_state.org_weight,st.session_state.dmg_weight,healed_weights)
                         st.session_state.model = healed_model
-                        show_patch_layer_replacement([layer.name for layer in healed_model.layers],'patch',st)
+                        show_patch_layer_replacement_struc([layer.name for layer in healed_model.layers],'patch',st)
                         st.success("✅ Model healing complete")
                         fig, ax = plt.subplots()
                         ax.plot(history.history['accuracy'], label='Training Accuracy')
