@@ -1,6 +1,6 @@
 # SHNN Project
 
-This repository contains resources and code for the **SHNN (Self-Healing Neural Network)** project. The project focuses on analyzing the robustness of neural networks under different types of structural damages and evaluating healing techniques to restore performance.
+This repository contains resources and code for the **SHNN (Self-Healing Neural Network)** project. The project focuses on analyzing the robustness of neural networks under different types of structural and adversial damages and evaluating healing techniques to restore performance.
 
 ---
 
