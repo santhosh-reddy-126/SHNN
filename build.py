@@ -40,26 +40,25 @@ def apply_structural_damage(model):
     return model, layer_name, mode, weights,damaged_weights
 
 
-def create_base_model():
-    inputs = Input(shape=(784,))
-    x = Dense(256, activation='relu', name='dense0')(inputs)
-    x = Dense(128, activation='relu', name='dense1')(x)
-    x = Dense(64, activation='relu', name='dense2')(x)
-    outputs = Dense(10, activation='softmax', name='output')(x)
-    return Model(inputs, outputs)
+def create_base_model(a,b,hidden,act='relu',out_act='softmax'):
+    inp=Input(shape=(a,))
+    x=inp
+    for i,u in enumerate(hidden): x=Dense(u,activation=act,name=f'dense{i}')(x)
+    out=Dense(b,activation=out_act,name='output')(x)
+    return Model(inp,out)
 
 def get_acc(model, X, y_true):
     loss, acc = model.evaluate(X, y_true, verbose=0)
     return round(acc * 100, 2)
 
 
-layer_names = ['dense0', 'dense1', 'dense2', 'output']
 
 
 
-def get_layer_outputs(model, X, layer_names=layer_names):
+def get_layer_outputs(model, X):
     outputs = []
     x = X
+    layer_names = [layer.name for layer in model.layers if isinstance(layer, tf.keras.layers.Dense)]
 
     for lname in layer_names:
         layer = model.get_layer(lname)
@@ -251,7 +250,7 @@ def train_healed_model(healed_model,model, X_train, y_train_cat,attack_type):
 
 #--------------------------------------------------------------------------------------------------------------------------
 
-def show_layer_damage_circles(layer_differences, layer_names, damaged_layer_name, st):
+def show_layer_damage_circles(layer_differences, layer_names, damaged_layer_name,filename, st):
     st.markdown("## 🧠 Neural Network Layer Damage Map")
 
     st.info(
@@ -290,11 +289,12 @@ def show_layer_damage_circles(layer_differences, layer_names, damaged_layer_name
     ax.set_ylim(0, 3)
     ax.set_aspect('equal')
     ax.axis('off')
+    fig.savefig("images/"+filename, dpi=500, bbox_inches="tight")
 
     st.pyplot(fig)
 
 
-def show_layer_damage_circles_for_struc(layer_differences, layer_names, damaged_layer_name, st):
+def show_layer_damage_circles_for_struc(layer_differences, layer_names, damaged_layer_name,filename, st):
     st.markdown("## 🧠 Neural Network Layer Damage Map")
 
     st.info(
@@ -333,11 +333,11 @@ def show_layer_damage_circles_for_struc(layer_differences, layer_names, damaged_
     ax.set_ylim(0, 3)
     ax.set_aspect('equal')
     ax.axis('off')
-
+    fig.savefig("images/"+filename, dpi=500, bbox_inches="tight")
     st.pyplot(fig)
 
 
-def show_layer_patch_circles_for_struc(layer_differences, layer_names, patch_layer_name, st):
+def show_layer_patch_circles_for_struc(layer_differences, layer_names, patch_layer_name,filename, st):
     st.markdown("## 🧠 Neural Network Layer Damage Map")
 
     st.info(
@@ -375,12 +375,12 @@ def show_layer_patch_circles_for_struc(layer_differences, layer_names, patch_lay
     ax.set_ylim(0, 3)
     ax.set_aspect('equal')
     ax.axis('off')
-
+    fig.savefig("images/"+filename, dpi=500, bbox_inches="tight")
     st.pyplot(fig)
 
 
 
-def show_patch_layer_replacement(layer_names, layer_differences, patched_layer_name, st):
+def show_patch_layer_replacement(layer_names, layer_differences, patched_layer_name,filename, st):
     st.markdown("## 🧩 Patched Neural Network Layer Map")
 
     st.success(
@@ -432,12 +432,12 @@ def show_patch_layer_replacement(layer_names, layer_differences, patched_layer_n
     ax.set_ylim(0, 3)
     ax.set_aspect('equal')
     ax.axis('off')
-
+    fig.savefig("images/"+filename, dpi=500, bbox_inches="tight")
     st.pyplot(fig)
 
 
 
-def show_patch_layer_replacement_struc(layer_names, patched_layer_name, st):
+def show_patch_layer_replacement_struc(layer_names, patched_layer_name,filename, st):
     st.markdown("## 🧩 Patched Neural Network Layer Map")
 
     st.success(
@@ -484,5 +484,5 @@ def show_patch_layer_replacement_struc(layer_names, patched_layer_name, st):
     ax.set_ylim(0, 3)
     ax.set_aspect('equal')
     ax.axis('off')
-
+    fig.savefig("images/"+filename, dpi=500, bbox_inches="tight")
     st.pyplot(fig)

@@ -35,7 +35,7 @@ st.title("🧠 Simulate Self-Healing Neural Network")
 
 uploaded_file = st.file_uploader("📂 Upload MNIST .mat file (e.g., mnist-original.mat)", type=["mat"])
 
-def plot_bar(metrics, title):
+def plot_bar(metrics, title,filename):
     fig, ax = plt.subplots()
     bars = sns.barplot(x=list(metrics.keys()), y=list(metrics.values()), palette="viridis", ax=ax)
     
@@ -46,9 +46,12 @@ def plot_bar(metrics, title):
     
     ax.set_ylabel("Accuracy (%)")
     ax.set_title(title)
+
+    fig.savefig(f"images/{filename}.png", dpi=500, bbox_inches="tight")
     st.pyplot(fig)
 
-def plot_weight_histograms(original_weights, damaged_weights, healed_weights, bins=100):
+
+def plot_weight_histograms(original_weights, damaged_weights, healed_weights,file_name, bins=100):
     import numpy as np
     import matplotlib.pyplot as plt
     import streamlit as st
@@ -72,6 +75,7 @@ def plot_weight_histograms(original_weights, damaged_weights, healed_weights, bi
     ax.set_ylabel("Frequency")
     ax.set_yscale('log')
     ax.legend()
+    fig.savefig(f"images/{file_name}.png", dpi=500, bbox_inches="tight")
     st.pyplot(fig)
 
 
@@ -99,8 +103,8 @@ if uploaded_file:
             data = mnist_data / 255.0
 
             X_train, X_test, y_train, y_test = train_test_split(data, mnist_label, test_size=0.2, random_state=42)
-            y_train_cat = to_categorical(y_train)
-            y_test_cat = to_categorical(y_test)
+            y_train_cat = to_categorical(y_train,len(np.unique(mnist_label)))
+            y_test_cat = to_categorical(y_test,len(np.unique(mnist_label)))
 
             st.session_state.update({
                 "X_train": X_train,
@@ -118,21 +122,22 @@ if uploaded_file:
         st.write(f"Unique classes: {np.unique(st.session_state.y)}")
 
         if st.button("🚀 Create Base Model"):
-            model = create_base_model()
+            model = create_base_model(784,len(np.unique(st.session_state.y)),[256,128,64])
             model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
             with st.spinner("Training base model (10 epochs)..."):
                 history=model.fit(st.session_state.X_train, st.session_state.y_train_cat, epochs=10, batch_size=128, verbose=0)
                 loss, acc = model.evaluate(st.session_state.X_test, st.session_state.y_test_cat, verbose=0)
             st.subheader("Training Progress")
 
-            # Create two plots
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+            # ---- Training Accuracy ----
+            fig_acc, ax1 = plt.subplots(figsize=(6, 5))
 
             acc_key = 'accuracy'
             if acc_key not in history.history:
-                acc_key = 'acc'  
+                acc_key = 'acc'
             train_acc = history.history[acc_key][-1]
-            # Plot Training Accuracy
+
             ax1.plot(history.history[acc_key], label='Training Accuracy', color='tab:blue')
             ax1.set_title('Training Accuracy')
             ax1.set_xlabel('Epoch')
@@ -140,7 +145,14 @@ if uploaded_file:
             ax1.legend()
             ax1.grid(True)
 
-            # Plot Training Loss
+            # Save Accuracy plot
+            fig_acc.savefig("images/Base_model_train_accuracy.png", dpi=500, bbox_inches="tight")
+            st.pyplot(fig_acc)
+
+
+            # ---- Training Loss ----
+            fig_loss, ax2 = plt.subplots(figsize=(6, 5))
+
             ax2.plot(history.history['loss'], label='Training Loss', color='tab:orange')
             ax2.set_title('Training Loss')
             ax2.set_xlabel('Epoch')
@@ -148,8 +160,10 @@ if uploaded_file:
             ax2.legend()
             ax2.grid(True)
 
-            # Display the plot in Streamlit
-            st.pyplot(fig)
+            # Save Loss plot
+            fig_loss.savefig("images/Base_model_train_loss.png", dpi=500, bbox_inches="tight")
+            st.pyplot(fig_loss)
+
 
             st.session_state.update({
                 "model": model,
@@ -191,11 +205,11 @@ if uploaded_file:
                         "attack_type": attack_type
                     })
 
-                    plot_bar(accs, "Accuracy Before Adversarial Healing")
+                    plot_bar(accs, "Accuracy Before Adversarial Healing",f"Normalvs{attack_type}_Damaged")
                     st.markdown("### 🔍 Sample Predictions (Clean vs Adversarial)")
 
                     num_to_show = 5
-                    class_names = [str(i) for i in range(10)]
+                    class_names = [str(i) for i in range(len(np.unique(st.session_state.y)))]
 
                     for i in range(num_to_show):
                         col1, col2 = st.columns(2)
@@ -216,7 +230,7 @@ if uploaded_file:
                     X_test = st.session_state.X_test
                     y_test_cat = st.session_state.y_test_cat
                     a,b,c = get_damaged_layer(model,X_test,y_test_cat,attack_type)
-                    show_layer_damage_circles(b,c,a,st)
+                    show_layer_damage_circles(b,c,a,f"layer_damage_visualization_{attack_type}",st)
                 if st.button("🛡️ Heal Model with Adversarial Training"):
                     with st.spinner("Healing using adversarial examples..."):
                         model = st.session_state.model
@@ -242,7 +256,7 @@ if uploaded_file:
                         X_test = st.session_state.X_test
                         y_test_cat = st.session_state.y_test_cat
                         a,b,c = get_damaged_layer(healed_model,X_test,y_test_cat,attack_type)
-                        show_patch_layer_replacement(c,b,"patch",st)
+                        show_patch_layer_replacement(c,b,"patch",f"layer_patch_visualization_{attack_type}",st)
                         st.success("✅ Model healed using adversarial training")
 
                 if st.button("📈 Re-evaluate After Adversarial Repair"):
@@ -254,9 +268,9 @@ if uploaded_file:
                         attack_type: model.predict(st.session_state.X_adv)
                     }
                     accs = {k: np.mean(np.argmax(v, axis=1) == np.argmax(y_sample, axis=1)) * 100 for k, v in preds.items()}
-                    plot_bar(accs, "Accuracy After Adversarial Healing")
+                    plot_bar(accs, "Accuracy After Adversarial Healing",f"Normalvs{attack_type}_Healed")
                     num_to_show = 10
-                    class_names = [str(i) for i in range(10)]
+                    class_names = [str(i) for i in range(len(np.unique(st.session_state.y)))]
 
                     for i in range(num_to_show):
                         col1, col2 = st.columns(2)
@@ -280,20 +294,21 @@ if uploaded_file:
                 st.subheader("🧱 Structural Damage Repair")
 
                 if st.button("💥 Apply Random Structural Damage"):
-                    st.session_state.model, layer, mode,original_weights,damaged_weights = apply_structural_damage(st.session_state.model)
+                    st.session_state.model, layer, st.session_state.mode,original_weights,damaged_weights = apply_structural_damage(st.session_state.model)
                     st.session_state.damaged_layer = layer
                     st.session_state.org_weight = original_weights
                     st.session_state.dmg_weight = damaged_weights
-                    st.error(f"💔 Structural damage applied to `{layer}` using `{mode}`")
+                    st.error(f"💔 Structural damage applied to `{layer}` using `{st.session_state.mode}`")
 
                 if st.button("🩻 Detect Damaged Layers"):
                     curr_outputs = get_layer_outputs(st.session_state.model, st.session_state.X_test[:10])
                     diffs = compare_saved_outputs(st.session_state.ref_outputs, curr_outputs)
                     
-                    layer_names = ['dense0', 'dense1', 'dense2', 'output']
+                    layer_names = [layer.name for layer in st.session_state.model.layers if isinstance(layer, tf.keras.layers.Dense)]
+
                     
                     layer = find_damaged_layer(diffs, layer_names)
-                    show_layer_damage_circles_for_struc(diffs,layer_names,layer,st)
+                    show_layer_damage_circles_for_struc(diffs,layer_names,layer,f"layer_damage_visualization_{st.session_state.mode}",st)
                     st.session_state.damaged_layer = layer
                     st.warning(f"🔍 Most likely damaged layer: `{layer}`")
 
@@ -310,9 +325,9 @@ if uploaded_file:
                             st.session_state.X_train,
                             st.session_state.y_train_cat
                         )
-                        plot_weight_histograms(st.session_state.org_weight,st.session_state.dmg_weight,healed_weights)
+                        plot_weight_histograms(st.session_state.org_weight,st.session_state.dmg_weight,healed_weights,f"Histogram_{st.session_state.mode}")
                         st.session_state.model = healed_model
-                        show_patch_layer_replacement_struc([layer.name for layer in healed_model.layers],'patch',st)
+                        show_patch_layer_replacement_struc([layer.name for layer in healed_model.layers],'patch',f"layer_patch_visualization_{st.session_state.mode}",st)
                         st.success("✅ Model healing complete")
                         fig, ax = plt.subplots()
                         ax.plot(history.history['accuracy'], label='Training Accuracy')
@@ -320,20 +335,17 @@ if uploaded_file:
                         ax.set_xlabel("Epoch")
                         ax.set_ylabel("Accuracy")
                         ax.legend()
+                        fig.savefig(f"images/patch_training_acc_{st.session_state.mode}.png", dpi=500, bbox_inches="tight")
                         st.pyplot(fig)
 
                 if st.button("📊 Calculate Test Accuracy"):
                     acc = get_acc(st.session_state.model, st.session_state.X_test, st.session_state.y_test_cat)
                     
-                    layer_names = ['dense0', 'dense1', 'dense2', 'output']
-                    idx = layer_names.index(st.session_state.damaged_layer)
-                    layer_names[idx] = "patch"
-                    healed_op = get_layer_outputs(st.session_state.model, st.session_state.X_test[:10],layer_names)
-                    
+                    layer_names = [layer.name for layer in st.session_state.model.layers if isinstance(layer, tf.keras.layers.Dense)]
+                    healed_op = get_layer_outputs(st.session_state.model, st.session_state.X_test[:10])
                     diffs = compare_saved_outputs(st.session_state.ref_outputs, healed_op)
 
-
-                    show_layer_patch_circles_for_struc(diffs,layer_names,'patch',st)
+                    show_layer_patch_circles_for_struc(diffs,layer_names,'patch',f"layer_patch_visualization_{st.session_state.mode}",st)
                     st.metric("🎯 Final Test Accuracy", f"{acc:.2f}%")
                     st.progress(acc / 100)
 
